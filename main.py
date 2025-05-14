@@ -1,0 +1,554 @@
+import sqlite3
+import telebot
+from config import *
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
+
+bot = telebot.TeleBot(f"{TOKEN}")
+conn = sqlite3.connect(r"database.db3", check_same_thread=False)
+cursor = conn.cursor()
+
+# Глобальные переменные
+user_results = {}
+temp_place_data = {}  # Для хранения данных о новых местах в процессе добавления
+
+def db_table_val(user_id: int, username):
+    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+    cursor.execute("UPDATE users SET username = ? WHERE user_id = ?",(username, user_id))
+    conn.commit()
+
+
+def save_user_query(user_id, query):
+    cursor.execute(
+        "UPDATE users SET last_query = ? WHERE user_id = ?", (query, user_id)
+    )
+    conn.commit()
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith(("next2_", "prev2_")))
+def handle_comment_pagination(call):
+    user_id = call.from_user.id
+    results = user_results.get(user_id)
+    # Получаем ID места
+    cursor.execute("SELECT rowid FROM places WHERE place_name = ?",(results[user_results["index"]][0],))
+    place_id = cursor.fetchone()[0]
+    # Определяем направление пагинации
+    if call.data.startswith("next2_"):
+        offset = int(call.data.split("_")[1])
+    else:
+        offset = int(call.data.split("_")[1])
+    # Получаем следующий/предыдущий непустой комментарий
+    cursor.execute("SELECT up.comment_user, up.user_id, u.username FROM user_places up LEFT JOIN users u ON up.user_id = u.user_id WHERE up.place_id = ? AND up.comment_user IS NOT NULL AND up.comment_user != '' LIMIT 1 OFFSET ?", (place_id, offset))
+    comment_data = cursor.fetchone()
+    if comment_data:
+        comment_text, comment_user_id, username = comment_data
+        comment = f"<b>{username}</b>:\n{comment_text}"
+        markup = InlineKeyboardMarkup()
+        buttons = []
+        # Проверяем, есть ли предыдущие комментарии
+        if offset > 0:
+            buttons.append(InlineKeyboardButton("Назад", callback_data=f"prev2_{offset - 1}"))
+        # Проверяем, есть ли следующие комментарии
+        cursor.execute("""
+            SELECT COUNT(*) 
+            FROM user_places 
+            WHERE place_id = ? 
+            AND comment_user IS NOT NULL
+            AND comment_user != ''
+            AND rowid > (
+                SELECT rowid 
+                FROM user_places 
+                WHERE place_id = ? 
+                AND comment_user IS NOT NULL
+                AND comment_user != ''
+                LIMIT 1 OFFSET ?
+            )
+        """, (place_id, place_id, offset))
+        has_next = cursor.fetchone()[0] > 0
+        if has_next:
+            buttons.append(InlineKeyboardButton("Вперёд", callback_data=f"next2_{offset + 1}"))
+        if buttons:
+            markup.row(*buttons)
+        bot.edit_message_text(chat_id=call.message.chat.id,
+                              message_id=call.message.message_id,
+                              text=comment,
+                              reply_markup=markup,
+                              parse_mode="HTML")
+
+def search_places(query):
+    cursor.execute("SELECT key FROM places")
+    keys = set(cursor.fetchall())
+    cursor.execute("SELECT place_name FROM places")
+    a = set(cursor.fetchall())
+    results = []
+    for key in keys:
+        if str(key[0]).lower() in query.lower():
+            cursor.execute(
+                "SELECT place_name, feedback, description, img FROM places WHERE key = ? ORDER BY feedback DESC",
+                (key[0],),
+            )
+            results.extend(cursor.fetchall())
+    for place_name in a:
+        if str(place_name[0]).lower() in query.lower():
+            cursor.execute(
+                "SELECT place_name, feedback, description, img FROM places WHERE place_name = ? ORDER BY feedback DESC",
+                (place_name[0],),
+            )
+            results.extend(cursor.fetchall())
+    return results
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "comments")
+def comments_callback(call):
+    bot.answer_callback_query(call.id)
+    user_id = call.from_user.id
+    results = user_results.get(user_id)
+    cursor.execute("SELECT rowid FROM places WHERE place_name = ?",(results[user_results["index"]][0],))
+    place_id = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM user_places WHERE place_id = ? AND comment_user IS NOT NULL AND comment_user != ''", (place_id,))
+    total_comments = cursor.fetchone()[0]
+    user_results["number"] = total_comments
+    user_results["comment_index"] = 0
+    if total_comments > 0:
+        # Находим первый непустой комментарий
+        offset = 0
+        while True:
+            cursor.execute("SELECT up.comment_user, up.user_id, u.username FROM user_places up LEFT JOIN users u ON up.user_id = u.user_id WHERE up.place_id = ? AND up.comment_user IS NOT NULL AND up.comment_user != '' LIMIT 1 OFFSET ?", (place_id, offset))
+            comment_data = cursor.fetchone()
+            comment_text, comment_user_id, username = comment_data
+            if comment_text:  # Если комментарий не пустой
+                comment = f"<b>{username}</b>:\n{comment_text}"
+                markup = InlineKeyboardMarkup()
+                if total_comments > offset + 1:
+                    markup.add(InlineKeyboardButton("Вперёд", callback_data=f"next2_{offset + 1}"))
+                bot.send_message(call.message.chat.id, comment, reply_markup=markup, parse_mode="HTML")
+                return
+            else:
+                offset += 1
+                if offset >= total_comments:
+                    break
+    else:
+        markup = InlineKeyboardMarkup()
+        bot.send_message(call.message.chat.id,"Пока нет комментариев.", reply_markup=markup)
+
+@bot.message_handler(commands=["start"])
+def start_message(message):
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("Найти новые места", callback_data="search"))
+    markup.add(InlineKeyboardButton("Показать места, где был", callback_data="show"))
+    markup.add(InlineKeyboardButton("Добавить место", callback_data="add_place"))
+    bot.send_message(
+        message.chat.id,
+        'Добро пожаловать в бот "kudapoti"\n' "Выберите нужное действие:",
+        reply_markup=markup,
+    )
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "show")
+def show_callback(call):
+    us_id = call.from_user.id
+    cursor.execute(
+        "SELECT p.place_name, p.feedback, p.description, p.img FROM places p JOIN user_places up ON p.rowid = up.place_id WHERE up.user_id = ? ORDER BY feedback DESC",
+        (us_id,),
+    )
+    visited_places = cursor.fetchall()
+    if visited_places:
+        user_results[us_id] = visited_places
+        send_result(call.message.chat.id, us_id, 0)
+    else:
+        bot.send_message(call.message.chat.id, "Вы ещё не посетили ни одного места")
+
+
+@bot.message_handler(commands=["menu"])
+def start_message(message):
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("Найти новые места", callback_data="search"))
+    markup.add(InlineKeyboardButton("Показать места, где был", callback_data="show"))
+    markup.add(InlineKeyboardButton("Добавить место", callback_data="add_place"))
+    bot.send_message(message.chat.id, "ГЛАВНОЕ МЕНЮ:", reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "point")
+def point_callback(call):
+    user_id = call.from_user.id
+    results = user_results.get(user_id)
+    place_name = results[user_results["index"]][0]
+    cursor.execute("SELECT rowid FROM places WHERE place_name = ?", (place_name,))
+    place_row = cursor.fetchone()
+    place_id = place_row[0]
+
+    # Проверяем, есть ли уже запись о посещении
+    cursor.execute(
+        "SELECT 1 FROM user_places WHERE user_id = ? AND place_id = ?",
+        (user_id, place_id),
+    )
+    if cursor.fetchone():
+        bot.send_message(call.message.chat.id, "Место уже добавлено в посещённые")
+    else:
+        msg = bot.send_message(
+            call.message.chat.id,
+            "Пожалуйста, поделитесь оценкой об этом месте\n"
+            "Введите число от 0 до 10:",
+        )
+        bot.register_next_step_handler(msg, point_db0, user_id)
+
+def point_db0(message, us_id):
+    results = user_results.get(us_id)
+    if not results:
+        bot.send_message(message.chat.id, "ОШИБКА")
+    place_name = results[user_results["index"]][0]
+    feedback = message.text
+    try:
+        feedback_int = int(feedback)
+        if feedback_int < 0 or feedback_int > 10:
+            raise ValueError
+    except ValueError:
+        msg = bot.send_message(message.chat.id, "Пожалуйста, введите число от 0 до 10:")
+        bot.register_next_step_handler(msg, point_db0, us_id)
+        return
+    cursor.execute("SELECT count_user FROM places WHERE place_name = ?", (place_name, ))
+    a = cursor.fetchone()[0]
+    if a:
+        count_user = a + 1
+    else:
+        count_user = 1
+    cursor.execute("SELECT sum_feedback FROM places WHERE place_name = ?", (place_name,))
+    b = cursor.fetchone()[0]
+    if b:
+        sum_feedback = b + feedback_int
+    else:
+        sum_feedback = feedback_int
+    cursor.execute(
+        "UPDATE places SET count_user = ?, sum_feedback = ?, feedback = ? WHERE place_name = ? ", (count_user, sum_feedback, round(sum_feedback / count_user, 1), place_name))
+    conn.commit()
+    msg = bot.send_message(message.chat.id, "Пожалуйста, поделитесь комментарием об этом месте (или нажмите /skip чтобы пропустить):")
+    bot.register_next_step_handler(msg, point_db, us_id)
+
+
+def point_db(message, us_id):
+    results = user_results.get(us_id)
+    if message.text and message.text.lower() == "/skip":
+        comment = None
+    else:
+        comment = message.text
+    place_name = results[user_results["index"]][0]
+    # Находим place_id по названию места
+    cursor.execute("SELECT rowid FROM places WHERE place_name = ?", (place_name,))
+    place_row = cursor.fetchone()
+    if not place_row:
+        bot.send_message(message.chat.id, "ОШИБКА: Место не найдено")
+        return
+    place_id = place_row[0]
+    # Проверяем, есть ли уже запись о посещении
+    cursor.execute(
+        "SELECT 1 FROM user_places WHERE user_id = ? AND place_id = ?",
+        (us_id, place_id)
+    )
+    if cursor.fetchone():
+        # Если запись существует, обновляем комментарий
+        cursor.execute(
+            "UPDATE user_places SET comment_user = ? WHERE user_id = ? AND place_id = ?",
+            (comment, us_id, place_id)
+        )
+    else:
+        # Если записи нет, создаем новую с комментарием
+        cursor.execute(
+            "INSERT INTO user_places (user_id, place_id, comment_user) VALUES (?, ?, ?)",
+            (us_id, place_id, comment)
+        )
+    conn.commit()
+    bot.send_message(message.chat.id, "Место добавлено в посещённые")
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "search")
+def search_callback(call):
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id, "Введите запрос для поиска мест:")
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "add_place")
+def add_place_callback(call):
+    bot.answer_callback_query(call.id)
+    user_id = call.from_user.id
+    # Инициализация данных для нового места
+    temp_place_data[user_id] = {"chat_id": call.message.chat.id, "data": {}}
+    msg = bot.send_message(call.message.chat.id, "Введите название места:")
+    bot.register_next_step_handler(msg, process_place_name, user_id)
+
+
+def process_place_name(message, user_id):
+    cursor.execute("SELECT place_name FROM places")
+    places = [x[0].lower() for x in cursor.fetchall()]
+    if message.text.lower() in places:
+        bot.send_message(
+            message.chat.id, "Это место уже добавлено, попробуйте добавить другое."
+        )
+        msg = bot.send_message(message.chat.id, "Введите название места:")
+        bot.register_next_step_handler(msg, process_place_name, user_id)
+    else:
+        temp_place_data[user_id]["data"]["name"] = message.text
+        msg = bot.send_message(
+            message.chat.id, "Введите оценку места(число от 1 до 10):"
+        )
+        bot.register_next_step_handler(msg, process_comment, user_id)
+
+
+def process_comment(message, user_id):
+    try:
+        # Пытаемся преобразовать введенный текст в число
+        feedback = int(message.text)
+        # Проверяем, что число в допустимом диапазоне
+        if feedback < 1 or feedback > 10:
+            raise ValueError("Оценка должна быть от 1 до 10")
+        # Если все хорошо, сохраняем оценку
+        place_name = temp_place_data[user_id]["data"]["name"]
+        count_user = 1
+        sum_feedback = feedback
+        temp_place_data[user_id]["data"]["sum_feedback"] = sum_feedback
+        temp_place_data[user_id]["data"]["count_user"] = count_user
+        temp_place_data[user_id]["data"]["feedback"] = round(sum_feedback / count_user, 1)
+        # Запрашиваем комментарий
+        msg = bot.send_message(
+            message.chat.id,
+            "Введите комментарий о месте (или нажмите /skip чтобы пропустить):"
+        )
+        bot.register_next_step_handler(msg, process_place_feedback, user_id)
+    except ValueError as e:
+        # Обрабатываем ошибки преобразования или неверного диапазона
+        error_msg = "Пожалуйста, введите целое число от 1 до 10"
+        if str(e) == "Оценка должна быть от 1 до 10":
+            error_msg = str(e)
+        # Повторно запрашиваем оценку
+        msg = bot.send_message(message.chat.id, error_msg)
+        bot.register_next_step_handler(msg, process_comment, user_id)
+
+def process_place_feedback(message, user_id):
+    if message.text.lower() == "/skip":
+        temp_place_data[user_id]["data"]["comment"] = None
+    else:
+        temp_place_data[user_id]["data"]["comment"] = message.text
+    msg = bot.send_message(message.chat.id, "Введите описание места:")
+    bot.register_next_step_handler(msg, process_place_description, user_id)
+
+
+def process_place_description(message, user_id):
+    temp_place_data[user_id]["data"]["description"] = message.text
+    msg = bot.send_message(
+        message.chat.id, "Введите тэг(ключ), по которому можно найти это место:"
+    )
+    bot.register_next_step_handler(msg, process_keys, user_id)
+
+
+def process_keys(message, user_id):
+    temp_place_data[user_id]["data"]["key"] = message.text
+    msg = bot.send_message(
+        message.chat.id, "Отправьте фото места (или нажмите /skip чтобы пропустить):"
+    )
+    bot.register_next_step_handler(msg, process_place_photo, user_id)
+
+
+def process_place_photo(message, user_id):
+    chat_id = temp_place_data[user_id]["chat_id"]
+    data = temp_place_data[user_id]["data"]
+    if message.photo:
+        data["img"] = message.photo[-1].file_id
+    elif message.text and message.text.lower() == "/skip":
+        data["img"] = None
+    else:
+        msg = bot.send_message(chat_id, "Пожалуйста, отправьте фото или нажмите /skip")
+        bot.register_next_step_handler(msg, process_place_photo, user_id)
+        return
+
+    cursor.execute(
+        "INSERT INTO places (key, place_name, feedback, count_user, sum_feedback, description, img) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            data["key"],
+            data["name"],
+            data["feedback"],
+            data["count_user"],
+            data["sum_feedback"],
+            data["description"],
+            data.get("img"),
+        ),
+    )
+    conn.commit()
+    bot.send_message(
+        chat_id,
+        f"Место '{data['name']}' успешно добавлено с ключом: {temp_place_data[user_id]['data']['key']}",
+    )
+    cursor.execute(
+        "SELECT rowid FROM places WHERE place_name = ?",
+        (temp_place_data[user_id]["data"]["name"],),
+    )
+    place_row = cursor.fetchone()
+    place_id = place_row[0]
+    print(temp_place_data[user_id]["data"]["comment"])
+    cursor.execute(
+        "INSERT INTO user_places (user_id, place_id, comment_user) VALUES (?, ?, ?)", (user_id, place_id, temp_place_data[user_id]["data"]["comment"])
+    )
+    conn.commit()
+    # Очищаем временные данные
+    if user_id in temp_place_data:
+        del temp_place_data[user_id]
+    # Возвращаем в главное меню
+    start_message(bot.send_message(chat_id, "Что дальше?"))
+
+
+def handle_add_place_error(user_id, error_message):
+    """Обработчик ошибок при добавлении места"""
+    if user_id in temp_place_data:
+        chat_id = temp_place_data[user_id]["chat_id"]
+        bot.send_message(chat_id, error_message)
+        del temp_place_data[user_id]
+    start_message(bot.send_message(chat_id, "Что дальше?"))
+
+
+@bot.message_handler(content_types=["text"])
+def get_text_message(message):
+    us_id = message.from_user.id
+    username = message.from_user.username  # Получаем username пользователя
+    db_table_val(us_id, username)
+    user_text = message.text
+    save_user_query(us_id, user_text)
+
+    # Проверяем, не находится ли пользователь в процессе добавления места
+    if us_id in temp_place_data:
+        bot.send_message(
+            message.chat.id, "⚠️ Завершите добавление места или нажмите /cancel"
+        )
+        return
+    results = search_places(user_text)
+    if not results:
+        bot.send_message(
+            message.chat.id, "🔍 Ничего не найдено. Попробуйте другой запрос."
+        )
+        return
+    user_results[us_id] = results
+    user_results["index"] = 0
+    send_result(message.chat.id, us_id, 0)
+
+
+def send_result(chat_id, user_id, index):
+    results = []
+    user_results["index"] = index
+    for x in range(len(user_results[user_id])):
+        results.append(user_results[user_id][x])
+    place = results[index]
+    message_text = (
+        f"📍 Место: {place[0]}\n"
+        f"✏️ Оценка: {place[1]} ⭐\n"
+        f"📝 Описание: {place[2]}\n\n"
+    )
+
+    markup = InlineKeyboardMarkup()
+    # Кнопка "Скрыть"
+    markup.add(InlineKeyboardButton("Скрыть", callback_data="unseen"))
+    markup.add(InlineKeyboardButton("Отметить посещённым", callback_data="point"))
+    markup.add(InlineKeyboardButton("Комментарии", callback_data="comments"))
+
+    # Кнопки пагинации
+    buttons = []
+    if index > 0:
+        buttons.append(
+            InlineKeyboardButton("< Назад", callback_data=f"prev_{index - 1}")
+        )
+    if index < len(results) - 1:
+        buttons.append(
+            InlineKeyboardButton("Вперёд >", callback_data=f"next_{index + 1}")
+        )
+    if buttons:
+        markup.row(*buttons)
+    if place[3]:
+        bot.send_photo(
+            chat_id, photo=f"{place[3]}", caption=message_text, reply_markup=markup
+        )
+    else:
+        bot.send_message(chat_id, message_text, reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda call: True)
+def handle_callback(call):
+    if call.data == "unseen":
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+        return
+
+    us_id = call.from_user.id
+    results = user_results.get(us_id)
+
+    if not results:
+        bot.answer_callback_query(
+            call.id, "🔍 Результаты устарели, выполните новый поиск"
+        )
+        return
+
+    if call.data.startswith("prev_"):
+        new_index = int(call.data.split("_")[1])
+        if 0 <= new_index < len(results):
+            edit_result(call.message, results, new_index)
+
+    elif call.data.startswith("next_"):
+        new_index = int(call.data.split("_")[1])
+        if 0 <= new_index < len(results):
+            edit_result(call.message, results, new_index)
+    bot.answer_callback_query(call.id)
+
+
+def edit_result(message, results, new_index):
+    user_results["index"] = new_index
+    place = results[new_index]
+    message_text = (
+        f"📍 Место: {place[0]}\n"
+        f"✏️ Оценка: {place[1]} ⭐\n"
+        f"📝 Описание: {place[2]}\n\n"
+    )
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("Скрыть", callback_data="unseen"))
+    markup.add(InlineKeyboardButton("Отметить посещённым", callback_data="point"))
+    markup.add(InlineKeyboardButton("Комментарии", callback_data="comments"))
+    buttons = []
+
+    if new_index > 0:
+        buttons.append(
+            InlineKeyboardButton("< Назад", callback_data=f"prev_{new_index - 1}")
+        )
+
+    if new_index < len(results) - 1:
+        buttons.append(
+            InlineKeyboardButton("Вперёд >", callback_data=f"next_{new_index + 1}")
+        )
+
+    if buttons:
+        markup.row(*buttons)
+
+    if place[3]:  # Если есть фото
+        if message.photo:  # Если текущее сообщение содержит фото
+            new_media = InputMediaPhoto(media=place[3], caption=message_text)
+            bot.edit_message_media(
+                media=new_media,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                reply_markup=markup,
+            )
+        else:  # Если текущее сообщение не содержит фото
+            bot.delete_message(message.chat.id, message.message_id)
+            bot.send_photo(
+                message.chat.id,
+                photo=place[3],
+                caption=message_text,
+                reply_markup=markup,
+            )
+    else:  # Если нет фото
+        if message.photo:  # Если текущее сообщение содержит фото
+            bot.delete_message(message.chat.id, message.message_id)
+            bot.send_message(message.chat.id, message_text, reply_markup=markup)
+        else:  # Если текущее сообщение не содержит фото
+            bot.edit_message_text(
+                message_text,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                reply_markup=markup,
+            )
+
+
+if __name__ == "__main__":
+    print("Бот запущен...")
+    bot.polling(none_stop=True)
