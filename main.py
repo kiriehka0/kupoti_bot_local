@@ -3,6 +3,7 @@ import telebot
 from config import *
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 
+
 bot = telebot.TeleBot(f"{TOKEN}")
 conn = sqlite3.connect(r"database.db3", check_same_thread=False)
 cursor = conn.cursor()
@@ -10,6 +11,92 @@ cursor = conn.cursor()
 # Глобальные переменные
 user_results = {}
 temp_place_data = {}  # Для хранения данных о новых местах в процессе добавления
+
+#РАБОТА С ТГ КАНАЛОМ
+CHANNEL_ID = -1002591278253
+
+
+@bot.channel_post_handler(content_types=['text', 'photo'])
+def handle_channel_post(message):
+    if message.chat.id != CHANNEL_ID:
+        return
+
+    # Получаем данные из сообщения
+    if message.photo:
+        photo_id = message.photo[-1].file_id
+        text = message.caption if message.caption else ""
+    else:
+        photo_id = None
+        text = message.text
+
+    # Парсим информацию о месте
+    place_data = parse_place_info(text)
+
+    # Если формат неправильный - отправляем инструкцию
+    if not place_data:
+        bot.send_message(message.chat.id, "Введите место в формате:\n"
+                                          "Название: Пример\n"
+                                          "Описание: Пример\n"
+                                          "Ключ: пример")
+        return
+
+    # Проверяем, существует ли уже такое место
+    cursor.execute("SELECT place_name FROM places")
+    places = [x[0].lower() for x in cursor.fetchall()]
+    if place_data["name"].lower() in places:
+        bot.send_message(message.chat.id,
+                         "Такое место уже существует! Пожалуйста, отправьте новое сообщение с другим названием.")
+        return
+
+    # Если все хорошо - добавляем в БД
+    add_place_to_db(place_data, photo_id)
+    bot.send_message(message.chat.id, f"Место '{place_data['name']}' успешно добавлено!")
+
+
+def parse_place_info(text):
+    data = {}
+    required_fields = ['название', 'описание', 'ключ']
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+
+    for line in lines:
+        # Разделяем строку на ключ и значение
+        if ':' not in line:
+            continue
+
+        key_part, value_part = line.split(':', 1)
+        key = key_part.strip().lower()
+        value = value_part.strip()
+
+        if key in required_fields:
+            # Сохраняем данные с правильными ключами
+            if key == 'название':
+                data['name'] = value
+            elif key == 'описание':
+                data['description'] = value
+            elif key == 'ключ':
+                data['key'] = value
+
+    # Проверяем, все ли обязательные поля заполнены
+    if all(field in data for field in ['name', 'description', 'key']):
+        return data
+    return None
+
+
+def add_place_to_db(place_data, photo_id=None):
+    """Добавляет место в базу данных"""
+    cursor.execute(
+        """INSERT INTO places 
+        (key, place_name, description, img) 
+        VALUES (?, ?, ?, ?)""",
+        (
+            place_data['key'].lower(),
+            place_data['name'],
+            place_data['description'],
+            photo_id
+        )
+    )
+    conn.commit()
+#КОНЕЦ РАБОТЫ С ТГ КАНАЛОМ
 
 def db_table_val(user_id: int, username):
     cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
@@ -300,7 +387,6 @@ def process_comment(message, user_id):
         if feedback < 1 or feedback > 10:
             raise ValueError("Оценка должна быть от 1 до 10")
         # Если все хорошо, сохраняем оценку
-        place_name = temp_place_data[user_id]["data"]["name"]
         count_user = 1
         sum_feedback = feedback
         temp_place_data[user_id]["data"]["sum_feedback"] = sum_feedback
@@ -339,7 +425,7 @@ def process_place_description(message, user_id):
 
 
 def process_keys(message, user_id):
-    temp_place_data[user_id]["data"]["key"] = message.text
+    temp_place_data[user_id]["data"]["key"] = message.text.lower()
     msg = bot.send_message(
         message.chat.id, "Отправьте фото места (или нажмите /skip чтобы пропустить):"
     )
@@ -391,16 +477,6 @@ def process_place_photo(message, user_id):
         del temp_place_data[user_id]
     # Возвращаем в главное меню
     start_message(bot.send_message(chat_id, "Что дальше?"))
-
-
-def handle_add_place_error(user_id, error_message):
-    """Обработчик ошибок при добавлении места"""
-    if user_id in temp_place_data:
-        chat_id = temp_place_data[user_id]["chat_id"]
-        bot.send_message(chat_id, error_message)
-        del temp_place_data[user_id]
-    start_message(bot.send_message(chat_id, "Что дальше?"))
-
 
 @bot.message_handler(content_types=["text"])
 def get_text_message(message):
