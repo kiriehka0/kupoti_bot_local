@@ -24,4 +24,4 @@
 # Презентация:
 PowerPoint презентацию нашего проекта можно посмотреть и скачать по ....(ссылка)
 # Демонстрационная база данных:
-![База данных](https://ggym.ru/wp-content/uploads/2020/01/otets-zabyvaet.jpg)
+![База данных](https://github.com/kiriehka0/kupoti_bot_local/blob/main/photo_2025-04-22_20-11-06.jpg)
