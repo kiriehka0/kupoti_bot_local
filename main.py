@@ -2,17 +2,44 @@ import sqlite3
 import telebot
 from config import *
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
+from openai import OpenAI
 
-
-bot = telebot.TeleBot(f"{TOKEN}")
+bot = telebot.TeleBot(f"7894601512:AAHneTPwQ63H_tMQzMv_HGse_BiGREiNrc8")
 conn = sqlite3.connect(r"database.db3", check_same_thread=False)
 cursor = conn.cursor()
 
 # Глобальные переменные
 user_results = {}
 temp_place_data = {}  # Для хранения данных о новых местах в процессе добавления
+client = OpenAI(
+    api_key="sk-hBp5bpQ7j2vUkwVDhUUmISa12HjGIUVx",
+    base_url="https://api.proxyapi.ru/openai/v1",
+)
 
-#РАБОТА С ТГ КАНАЛОМ
+
+def analyze_comment(comment):
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Оцени тональность комментария. Ответь ТОЛЬКО одним словом: 'хороший' или 'плохой'."
+                },
+                {
+                    "role": "user",
+                    "content": comment
+                }
+            ],
+            temperature=0.0  # Для минимизации случайности
+        )
+        return response.choices[0].message.content.strip().lower()
+    except Exception as e:
+        print(f"Ошибка анализа: {e}")
+        return "нейтральный"
+
+
+# РАБОТА С ТГ КАНАЛОМ
 CHANNEL_ID = -1002591278253
 
 
@@ -96,11 +123,13 @@ def add_place_to_db(place_data, photo_id=None):
         )
     )
     conn.commit()
-#КОНЕЦ РАБОТЫ С ТГ КАНАЛОМ
+
+
+# КОНЕЦ РАБОТЫ С ТГ КАНАЛОМ
 
 def db_table_val(user_id: int, username):
     cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
-    cursor.execute("UPDATE users SET username = ? WHERE user_id = ?",(username, user_id))
+    cursor.execute("UPDATE users SET username = ? WHERE user_id = ?", (username, user_id))
     conn.commit()
 
 
@@ -116,7 +145,7 @@ def handle_comment_pagination(call):
     user_id = call.from_user.id
     results = user_results.get(user_id)
     # Получаем ID места
-    cursor.execute("SELECT rowid FROM places WHERE place_name = ?",(results[user_results["index"]][0],))
+    cursor.execute("SELECT rowid FROM places WHERE place_name = ?", (results[user_results["index"]][0],))
     place_id = cursor.fetchone()[0]
     # Определяем направление пагинации
     if call.data.startswith("next2_"):
@@ -124,11 +153,12 @@ def handle_comment_pagination(call):
     else:
         offset = int(call.data.split("_")[1])
     # Получаем следующий/предыдущий непустой комментарий
-    cursor.execute("SELECT up.comment_user, up.user_id, u.username FROM user_places up LEFT JOIN users u ON up.user_id = u.user_id WHERE up.place_id = ? AND up.comment_user IS NOT NULL AND up.comment_user != '' LIMIT 1 OFFSET ?", (place_id, offset))
+    cursor.execute(
+        "SELECT up.comment_user, up.user_id, u.username, up.sentiment, up.feedback2 FROM user_places up LEFT JOIN users u ON up.user_id = u.user_id WHERE up.place_id = ? AND up.comment_user IS NOT NULL AND up.comment_user != '' LIMIT 1 OFFSET ?",
+        (place_id, offset))
     comment_data = cursor.fetchone()
     if comment_data:
-        comment_text, comment_user_id, username = comment_data
-        comment = f"<b>{username}</b>:\n{comment_text}"
+        comment_text, comment_user_id, username, sentiment, feedback = comment_data
         markup = InlineKeyboardMarkup()
         buttons = []
         # Проверяем, есть ли предыдущие комментарии
@@ -155,11 +185,18 @@ def handle_comment_pagination(call):
             buttons.append(InlineKeyboardButton("Вперёд", callback_data=f"next2_{offset + 1}"))
         if buttons:
             markup.row(*buttons)
-        bot.edit_message_text(chat_id=call.message.chat.id,
-                              message_id=call.message.message_id,
-                              text=comment,
-                              reply_markup=markup,
-                              parse_mode="HTML")
+        feedback = comment_data[4]
+        sentiment = comment_data[3]  # Извлекаем тональность из БД
+        emoji = "😊" if sentiment == "хороший" else "😞" if sentiment == "плохой" else "😐"
+
+        bot.edit_message_text(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            text=f"{emoji}<b>{username}</b>:\nОценка:{feedback}\nКомментарий:{comment_text}",
+            parse_mode="HTML",
+            reply_markup=markup
+        )
+
 
 def search_places(query):
     cursor.execute("SELECT key FROM places")
@@ -189,9 +226,11 @@ def comments_callback(call):
     bot.answer_callback_query(call.id)
     user_id = call.from_user.id
     results = user_results.get(user_id)
-    cursor.execute("SELECT rowid FROM places WHERE place_name = ?",(results[user_results["index"]][0],))
+    cursor.execute("SELECT rowid FROM places WHERE place_name = ?", (results[user_results["index"]][0],))
     place_id = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM user_places WHERE place_id = ? AND comment_user IS NOT NULL AND comment_user != ''", (place_id,))
+    cursor.execute(
+        "SELECT COUNT(*) FROM user_places WHERE place_id = ? AND comment_user IS NOT NULL AND comment_user != ''",
+        (place_id,))
     total_comments = cursor.fetchone()[0]
     user_results["number"] = total_comments
     user_results["comment_index"] = 0
@@ -199,11 +238,16 @@ def comments_callback(call):
         # Находим первый непустой комментарий
         offset = 0
         while True:
-            cursor.execute("SELECT up.comment_user, up.user_id, u.username FROM user_places up LEFT JOIN users u ON up.user_id = u.user_id WHERE up.place_id = ? AND up.comment_user IS NOT NULL AND up.comment_user != '' LIMIT 1 OFFSET ?", (place_id, offset))
+            cursor.execute(
+                "SELECT up.comment_user, up.user_id, u.username, up.sentiment, up.feedback2 FROM user_places up LEFT JOIN users u ON up.user_id = u.user_id WHERE up.place_id = ? AND up.comment_user IS NOT NULL AND up.comment_user != '' LIMIT 1 OFFSET ?",
+                (place_id, offset))
             comment_data = cursor.fetchone()
-            comment_text, comment_user_id, username = comment_data
+            comment_text, comment_user_id, username, sentiment, feedback = comment_data
             if comment_text:  # Если комментарий не пустой
-                comment = f"<b>{username}</b>:\n{comment_text}"
+                sentiment = comment_data[3]  # Извлекаем тональность из БД
+                feedback = comment_data[4]
+                emoji = "😊" if sentiment == "хороший" else "😞" if sentiment == "плохой" else "😐"
+                comment = f"{emoji}<b>{username}</b>:\nОценка:{feedback}\nКомментарий:{comment_text}"
                 markup = InlineKeyboardMarkup()
                 if total_comments > offset + 1:
                     markup.add(InlineKeyboardButton("Вперёд", callback_data=f"next2_{offset + 1}"))
@@ -215,7 +259,8 @@ def comments_callback(call):
                     break
     else:
         markup = InlineKeyboardMarkup()
-        bot.send_message(call.message.chat.id,"Пока нет комментариев.", reply_markup=markup)
+        bot.send_message(call.message.chat.id, "Пока нет комментариев.", reply_markup=markup)
+
 
 @bot.message_handler(commands=["start"])
 def start_message(message):
@@ -278,6 +323,7 @@ def point_callback(call):
         )
         bot.register_next_step_handler(msg, point_db0, user_id)
 
+
 def point_db0(message, us_id):
     results = user_results.get(us_id)
     if not results:
@@ -292,7 +338,7 @@ def point_db0(message, us_id):
         msg = bot.send_message(message.chat.id, "Пожалуйста, введите число от 0 до 10:")
         bot.register_next_step_handler(msg, point_db0, us_id)
         return
-    cursor.execute("SELECT count_user FROM places WHERE place_name = ?", (place_name, ))
+    cursor.execute("SELECT count_user FROM places WHERE place_name = ?", (place_name,))
     a = cursor.fetchone()[0]
     if a:
         count_user = a + 1
@@ -305,13 +351,15 @@ def point_db0(message, us_id):
     else:
         sum_feedback = feedback_int
     cursor.execute(
-        "UPDATE places SET count_user = ?, sum_feedback = ?, feedback = ? WHERE place_name = ? ", (count_user, sum_feedback, round(sum_feedback / count_user, 1), place_name))
+        "UPDATE places SET count_user = ?, sum_feedback = ?, feedback = ? WHERE place_name = ? ",
+        (count_user, sum_feedback, round(sum_feedback / count_user, 1), place_name))
     conn.commit()
-    msg = bot.send_message(message.chat.id, "Пожалуйста, поделитесь комментарием об этом месте (или нажмите /skip чтобы пропустить):")
-    bot.register_next_step_handler(msg, point_db, us_id)
+    msg = bot.send_message(message.chat.id,
+                           "Пожалуйста, поделитесь комментарием об этом месте (или нажмите /skip чтобы пропустить):")
+    bot.register_next_step_handler(msg, point_db, us_id, feedback_int)
 
 
-def point_db(message, us_id):
+def point_db(message, us_id, feedback_int):
     results = user_results.get(us_id)
     if message.text and message.text.lower() == "/skip":
         comment = None
@@ -325,23 +373,23 @@ def point_db(message, us_id):
         bot.send_message(message.chat.id, "ОШИБКА: Место не найдено")
         return
     place_id = place_row[0]
+    sentiment = analyze_comment(message.text) if message.text != "/skip" else None
     # Проверяем, есть ли уже запись о посещении
     cursor.execute(
         "SELECT 1 FROM user_places WHERE user_id = ? AND place_id = ?",
         (us_id, place_id)
     )
-    if cursor.fetchone():
+    #if cursor.fetchone():
         # Если запись существует, обновляем комментарий
-        cursor.execute(
-            "UPDATE user_places SET comment_user = ? WHERE user_id = ? AND place_id = ?",
-            (comment, us_id, place_id)
-        )
-    else:
+       # cursor.execute(
+         #   "UPDATE user_places SET comment_user = ? WHERE user_id = ? AND place_id = ?",
+           # (comment, us_id, place_id)
+       # )
         # Если записи нет, создаем новую с комментарием
-        cursor.execute(
-            "INSERT INTO user_places (user_id, place_id, comment_user) VALUES (?, ?, ?)",
-            (us_id, place_id, comment)
-        )
+    cursor.execute(
+        "INSERT INTO user_places (user_id, place_id, comment_user, sentiment, feedback2) VALUES (?, ?, ?, ?, ?)",
+        (us_id, place_id, comment, sentiment, feedback_int)
+    )
     conn.commit()
     bot.send_message(message.chat.id, "Место добавлено в посещённые")
 
@@ -407,11 +455,13 @@ def process_comment(message, user_id):
         msg = bot.send_message(message.chat.id, error_msg)
         bot.register_next_step_handler(msg, process_comment, user_id)
 
+
 def process_place_feedback(message, user_id):
     if message.text.lower() == "/skip":
         temp_place_data[user_id]["data"]["comment"] = None
     else:
         temp_place_data[user_id]["data"]["comment"] = message.text
+        temp_place_data[user_id]["data"]["sentiment"] = analyze_comment(message.text) if message.text != "/skip" else None
     msg = bot.send_message(message.chat.id, "Введите описание места:")
     bot.register_next_step_handler(msg, process_place_description, user_id)
 
@@ -467,9 +517,9 @@ def process_place_photo(message, user_id):
     )
     place_row = cursor.fetchone()
     place_id = place_row[0]
-    print(temp_place_data[user_id]["data"]["comment"])
     cursor.execute(
-        "INSERT INTO user_places (user_id, place_id, comment_user) VALUES (?, ?, ?)", (user_id, place_id, temp_place_data[user_id]["data"]["comment"])
+        "INSERT INTO user_places (user_id, place_id, comment_user, sentiment, feedback2) VALUES (?, ?, ?, ?, ?)",
+        (user_id, place_id, temp_place_data[user_id]["data"]["comment"], data["sentiment"], data["sum_feedback"])
     )
     conn.commit()
     # Очищаем временные данные
@@ -477,6 +527,7 @@ def process_place_photo(message, user_id):
         del temp_place_data[user_id]
     # Возвращаем в главное меню
     start_message(bot.send_message(chat_id, "Что дальше?"))
+
 
 @bot.message_handler(content_types=["text"])
 def get_text_message(message):
