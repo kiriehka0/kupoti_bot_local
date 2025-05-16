@@ -13,7 +13,7 @@
 # Запуск проекта:
 Для первого локального запуска проекта требуется:
 - Импортировать файлы *config.py*, *main.py*, *database.db3*
-- Установить *TelegramBotAPI*, ... (нейросетка) в терминале командой *pip install* название
+- Установить *TelegramBotAPI*, ... (нейросетка) в терминале командой *pip install* {название}
 - Установить *SqliteStudio 3.3.3* [тык](https://baixe.net/dwn/4dc2fcb4034f2e9efc61927830d8d7ea/sqlitestudio-3-3-3.zip)
 - Запустить программу
 - Открыть бота по [ссылке](https://t.me/kuda_poiti228_bot)
