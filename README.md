@@ -24,4 +24,4 @@
 # Презентация:
 PowerPoint презентацию нашего проекта можно посмотреть и скачать по [ссылке](https://docs.google.com/presentation/d/17CrF2PnTe5L4qNh78MtLmmJIrqurCido6Nk4xAcYUSM/edit?usp=sharing)
 # Демонстрационная база данных:
-![База данных](https://github.com/kiriehka0/kupoti_bot_local/blob/main/Untitled%20(2).png)
+![База данных](https://github.com/kiriehka0/kupoti_bot_local/blob/main/Untitled%20(3).png)
