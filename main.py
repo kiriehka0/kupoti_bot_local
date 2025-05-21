@@ -454,7 +454,7 @@ def add_user_place_callback(call):
 
 
 def process_place_name(message, user_id):
-    if message.text == "/cancel":
+    if message.text == "/cancel" or message.text == "/menu":
         if user_id in temp_place_data:
             del temp_place_data[user_id]
         bot.send_message(message.chat.id, "Хорошо, добавление места прервано")
@@ -462,7 +462,7 @@ def process_place_name(message, user_id):
         return
     else:
         cursor.execute("SELECT place_name FROM places")
-        places = [x[0].lower() for x in cursor.fetchall()]
+        places = [str(x[0]).lower() for x in cursor.fetchall()]
         if message.text.lower() in places:
             bot.send_message(
                 message.chat.id, "Такое место уже есть в нашей базе, попробуйте добавить другое 😊\n")
@@ -477,7 +477,7 @@ def process_place_name(message, user_id):
 
 
 def process_comment(message, user_id):
-    if message.text == "/cancel":
+    if message.text == "/cancel" or message.text == "/menu":
         if user_id in temp_place_data:
             del temp_place_data[user_id]
         bot.send_message(message.chat.id, "Хорошо, добавление места прервано")
@@ -513,7 +513,7 @@ def process_comment(message, user_id):
 
 
 def process_place_feedback(message, user_id):
-    if message.text == "/cancel":
+    if message.text == "/cancel" or message.text == "/menu":
         if user_id in temp_place_data:
             del temp_place_data[user_id]
         bot.send_message(message.chat.id, "Хорошо, добавление места прервано")
@@ -532,7 +532,7 @@ def process_place_feedback(message, user_id):
 
 
 def process_place_description(message, user_id):
-    if message.text == "/cancel":
+    if message.text == "/cancel" or message.text == "/menu":
         if user_id in temp_place_data:
             del temp_place_data[user_id]
         bot.send_message(message.chat.id, "Хорошо, добавление места прервано")
@@ -547,7 +547,7 @@ def process_place_description(message, user_id):
 
 
 def process_keys(message, user_id):
-    if message.text == "/cancel":
+    if message.text == "/cancel" or message.text == "/menu":
         if user_id in temp_place_data:
             del temp_place_data[user_id]
         bot.send_message(message.chat.id, "Хорошо, добавление места прервано")
@@ -562,7 +562,7 @@ def process_keys(message, user_id):
 
 
 def process_place_photo(message, user_id):
-    if message.text == "/cancel":
+    if message.text == "/cancel" or message.text == "/menu":
         if user_id in temp_place_data:
             del temp_place_data[user_id]
         bot.send_message(message.chat.id, "Хорошо, добавление места прервано")
@@ -613,7 +613,8 @@ def process_place_photo(message, user_id):
         if user_id in temp_place_data:
             del temp_place_data[user_id]
         # Возвращаем в главное меню
-        start_message(bot.send_message(chat_id, "Что дальше?"))
+        bot.send_message(chat_id, "Что дальше?")
+        start_message(message)
 
 
 @bot.message_handler(content_types=["text"])
@@ -627,7 +628,7 @@ def get_text_message(message):
     # Проверяем, не находится ли пользователь в процессе добавления места
     if us_id in temp_place_data:
         bot.send_message(
-            message.chat.id, "⚠️ Завершите добавление места или нажмите /cancel"
+            message.chat.id, "⚠️ Завершите действие или нажмите /cancel"
         )
         return
     results = search_places(user_text)
@@ -685,21 +686,370 @@ def send_result(chat_id, user_id, index):
         "delete_user", "delete_comment", "assign_role"
     ]
 )
-def admin_callbacks(call):
+
+
+def check_user_role(user_id, required_role):
+    with conn:  # Автоматически завершает транзакцию
+        cursor = conn.cursor()
+        cursor.execute("SELECT user_role FROM users WHERE user_id=?", (user_id,))
+        result = cursor.fetchone()
+        return result[0] == required_role if result else False
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "add_place")
+def add_place_callback(call):
+    user_id = call.from_user.id
+    if check_user_role(user_id, "user"):
+        bot.answer_callback_query(call.id, "⚠️ Недостаточно прав")
+        return
+    bot.clear_step_handler_by_chat_id(call.message.chat.id)
+    if user_id in temp_place_data:
+        del temp_place_data[user_id]
     bot.answer_callback_query(call.id)
-    # Здесь вызываем соответствующие функции
-    if call.data == "add_place":
-        add_place_callback(call)
-    elif call.data == "edit_place":
-        edit_place_callback(call)
-    elif call.data == "delete_place":
-        delete_place_callback(call)
-    elif call.data == "delete_user":
-        delete_user_callback(call)
-    elif call.data == "delete_comment":
-        delete_comment_callback(call)
-    elif call.data == "assign_role":
-        assign_role_callback(call)
+    prompt = (
+        "Отправьте фотографию места (опционально), введите данные о месте в формате:\n"
+        "Название: Пример\n"
+        "Описание: Пример\n"
+        "Ключ: Пример"
+    )
+    msg = bot.send_message(call.message.chat.id, prompt)
+    bot.register_next_step_handler(msg, process_place_input)
+
+
+def process_place_input(message):
+    if message.text == "/cancel" or message.text == "/menu":
+        start_message(message)
+        return
+    # Получаем текст и изображение
+    if message.photo:
+        photo_id = message.photo[-1].file_id
+        text = message.caption if message.caption else ""
+    else:
+        photo_id = None
+        text = message.text
+
+    # Парсим данные
+    place_data = parse_place_info(text)
+    if not place_data or text == "":
+        msg = bot.send_message(
+            message.chat.id,
+            "Введите данные в правильном формате:\n"
+            "Название: Пример\n"
+            "Описание: Пример\n"
+            "Ключ: пример"
+        )
+        bot.register_next_step_handler(msg, process_place_input)
+        return
+
+    # Проверяем дубликаты
+    cursor.execute("SELECT place_name FROM places")
+    places = [str(x[0]).lower() for x in cursor.fetchall()]
+    if place_data["name"].lower() in places:
+        msg = bot.send_message(message.chat.id, "Такое место уже существует! Введите данные заново:")
+        bot.register_next_step_handler(msg, process_place_input)
+        return
+
+    # Добавляем место в БД
+    add_place_to_db(place_data, photo_id)
+    bot.send_message(message.chat.id, f"Место '{place_data['name']}' успешно добавлено!")
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "edit_place")
+def edit_place_callback(call):
+    user_id = call.from_user.id
+    if check_user_role(user_id, "user"):
+        bot.answer_callback_query(call.id, "⚠️ Недостаточно прав")
+        return
+    bot.clear_step_handler_by_chat_id(call.message.chat.id)
+    if user_id in temp_place_data:
+        del temp_place_data[user_id]
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(call.message.chat.id, "Введите ID места для редактирования:")
+    bot.register_next_step_handler(msg, select_place_for_edit, user_id)
+
+
+def select_place_for_edit(message, user_id):
+    if message.text == "/cancel" or message.text == "/menu":
+        if user_id in temp_place_data:
+            del temp_place_data[user_id]
+        start_message(message)
+        return
+    place_id = message.text
+    cursor.execute("SELECT place_id, place_name, description, img FROM places WHERE place_id=?", (place_id,))
+    place = cursor.fetchone()
+    if not place:
+        msg = bot.send_message(message.chat.id, "Место отсутствует в базе данных. Введите ID места заново:")
+        bot.register_next_step_handler(msg, select_place_for_edit, user_id)
+        return
+
+    # Сохраняем данные для редактирования
+    temp_place_data[user_id] = {
+        "place_id": place[0],
+        "original": {
+            "name": place[1],
+            "description": place[2],
+            "img": place[3]
+        },
+        "updates": {}
+    }
+    # Начинаем редактирование названия
+    msg = bot.send_message(
+        message.chat.id,
+        f"Текущее название: {place[1]}\nВведите новое название или /skip, чтобы оставить как есть:"
+    )
+    bot.register_next_step_handler(msg, edit_name_step, user_id)
+
+
+def edit_name_step(message, user_id):
+    if message.text == "/cancel" or message.text == "/menu":
+        if user_id in temp_place_data:
+            del temp_place_data[user_id]
+        start_message(message)
+        return
+
+    if message.text.lower() == "/skip":
+        temp_place_data[user_id]["updates"]["name"] = temp_place_data[user_id]["original"]["name"]
+        msg = bot.send_message(
+            message.chat.id,
+            f"Текущее описание: {temp_place_data[user_id]["original"]["description"]}\n"
+            f"Введите новое описание или /skip, чтобы оставить как есть:"
+        )
+        bot.register_next_step_handler(msg, edit_description_step, user_id)
+        return
+
+    new_name = message.text.strip()
+    cursor.execute("SELECT place_name FROM places WHERE place_name=?", (new_name,))
+    if cursor.fetchone():
+        msg = bot.send_message(message.chat.id, "Такое название уже занято. Попробуйте другое:")
+        bot.register_next_step_handler(msg, edit_name_step, user_id)
+    else:
+        temp_place_data[user_id]["updates"]["name"] = new_name
+        msg = bot.send_message(
+            message.chat.id,
+            f"Текущее описание: {temp_place_data[user_id]["original"]["description"]}\n"
+            f"Введите новое описание или /skip, чтобы оставить как есть:"
+        )
+        bot.register_next_step_handler(msg, edit_description_step, user_id)
+
+
+def edit_description_step(message, user_id):
+    if message.text == "/cancel" or message.text == "/menu":
+        if user_id in temp_place_data:
+            del temp_place_data[user_id]
+        start_message(message)
+        return
+
+    msg = bot.send_message(
+        message.chat.id,
+        f"Отправьте новое изображение или /skip, чтобы оставить как есть:"
+    )
+
+    if message.text.lower() == "/skip":
+        temp_place_data[user_id]["updates"]["description"] = temp_place_data[user_id]["original"]["description"]
+        bot.register_next_step_handler(msg, edit_image_step, user_id)
+        return
+
+    temp_place_data[user_id]["updates"]["description"] = message.text.strip()
+    bot.register_next_step_handler(msg, edit_image_step, user_id)
+
+
+def edit_image_step(message, user_id):
+    if message.text == "/cancel" or message.text == "/menu":
+        if user_id in temp_place_data:
+            del temp_place_data[user_id]
+        start_message(message)
+        return
+
+    if message.text and message.text.lower() == "/skip":
+        temp_place_data[user_id]["updates"]["img"] = temp_place_data[user_id]["original"]["img"]
+        apply_edits(message, user_id)
+        return
+
+    if message.photo:
+        temp_place_data[user_id]["updates"]["img"] = message.photo[-1].file_id
+    else:
+        msg = bot.send_message(message.chat.id, "Пожалуйста, отправьте фото или /skip:")
+        bot.register_next_step_handler(msg, edit_image_step, user_id)
+        return
+
+    apply_edits(message, user_id)
+
+
+def apply_edits(message, user_id):
+    updates = temp_place_data[user_id]["updates"]
+    place_id = temp_place_data[user_id]["place_id"]
+
+    # Обновляем только изменённые поля
+    if "name" in updates:
+        cursor.execute("UPDATE places SET place_name=? WHERE place_id=?", (updates["name"], place_id))
+    if "description" in updates:
+        cursor.execute(
+            "UPDATE places SET description=? WHERE place_id=?", (updates["description"], place_id))
+    if "img" in updates:
+        cursor.execute("UPDATE places SET img=? WHERE place_id=?", (updates["img"], place_id))
+
+    conn.commit()
+    bot.send_message(message.chat.id, "Место успешно обновлено!")
+    del temp_place_data[user_id]  # Очищаем временные данные
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "delete_place")
+def delete_place_callback(call):
+    user_id = call.from_user.id
+    if not check_user_role(user_id, "admin"):
+        bot.answer_callback_query(call.id, "⚠️ Недостаточно прав")
+        return
+    bot.clear_step_handler_by_chat_id(call.message.chat.id)
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(call.message.chat.id, "Введите ID места для удаления:")
+    bot.register_next_step_handler(msg, confirm_delete_place)
+
+
+def confirm_delete_place(message):
+    if message.text == "/cancel" or message.text == "/menu":
+        start_message(message)
+        return
+    try:
+        place_id = message.text
+        cursor.execute("SELECT place_id FROM places WHERE place_id=?", (place_id,))
+        if not cursor.fetchone():
+            raise ValueError
+        cursor.execute("SELECT place_name FROM places WHERE place_id=?", (place_id,))
+        place_name = cursor.fetchone()
+        cursor.execute("DELETE FROM places WHERE place_id=?", (place_id,))
+        conn.commit()
+        bot.send_message(message.chat.id, f"Место {place_name} удалено.")
+    except ValueError:
+        msg = bot.send_message(message.chat.id, f"Место отсутствует в базе данных\nВведите ID места заново:")
+        bot.register_next_step_handler(msg, confirm_delete_place)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "delete_user")
+def delete_user_callback(call):
+    user_id = call.from_user.id
+    if not check_user_role(user_id, "admin"):
+        bot.answer_callback_query(call.id, "⚠️ Недостаточно прав")
+        return
+    bot.clear_step_handler_by_chat_id(call.message.chat.id)
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(call.message.chat.id, "Введите ID пользователя для удаления:")
+    bot.register_next_step_handler(msg, confirm_delete_user)
+
+
+def confirm_delete_user(message):
+    if message.text == "/cancel" or message.text == "/menu":
+        start_message(message)
+        return
+    try:
+        user_id = message.text
+        cursor.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,))
+        if not cursor.fetchone():
+            raise ValueError("user_not_found")
+        cursor.execute("DELETE FROM users WHERE user_id=?", (user_id,))
+        cursor.execute("DELETE FROM user_places WHERE user_id=?", (user_id,))
+        conn.commit()
+        bot.send_message(message.chat.id, f"Пользователь {user_id} удален.")
+    except ValueError as e:
+        error_type = str(e)
+        if error_type == "user_not_found":
+            error_msg = "Пользователь не найден в базе данных"
+        else:
+            error_msg = "Неверный формат. Пример: 12345"
+        msg = bot.send_message(message.chat.id, f"{error_msg}\nВведите ID заново:")
+        bot.register_next_step_handler(msg, confirm_delete_user)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "assign_role")
+def assign_role_callback(call):
+    user_id = call.from_user.id
+    if not check_user_role(user_id, "admin"):
+        bot.answer_callback_query(call.id, "⚠️ Недостаточно прав")
+        return
+    bot.clear_step_handler_by_chat_id(call.message.chat.id)
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(
+        call.message.chat.id,
+        "Введите ID пользователя и роль (через пробел):"
+    )
+    bot.register_next_step_handler(msg, update_user_role)
+
+
+def update_user_role(message):
+    if message.text == "/cancel" or message.text == "/menu":
+        start_message(message)
+        return
+    allowed_roles = {"admin", "user", "manager"}
+    try:
+        user_id, role = message.text.split()
+        # Проверка формата ввода
+        if role not in allowed_roles:
+            raise ValueError("invalid_role")
+        # Проверка существования пользователя
+        cursor.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,))
+        if not cursor.fetchone():
+            raise ValueError("user_not_found")
+        cursor.execute("SELECT user_role FROM users WHERE user_id=?", (user_id,))
+        curr_role = cursor.fetchone()
+        if role in curr_role:
+            raise ValueError("same_role")
+        cursor.execute("UPDATE users SET user_role=? WHERE user_id=?", (role, user_id))
+        conn.commit()
+        bot.send_message(message.chat.id, f"Роль пользователя {user_id} изменена на {role}.")
+    except ValueError as e:
+        error_type = str(e)
+        if error_type == "invalid_role":
+            error_msg = f"Неверная роль. Используйте: {', '.join(allowed_roles)}"
+        elif error_type == "user_not_found":
+            error_msg = "Пользователь не найден в базе данных"
+        elif error_type == "same_role":
+            error_msg = "У пользователя уже установленна эта роль"
+        else:
+            error_msg = "Неверный формат. Пример: 12345 manager"
+        msg = bot.send_message(message.chat.id, f"{error_msg}\nВведите ID и роль заново:")
+        bot.register_next_step_handler(msg, update_user_role)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "delete_comment")
+def delete_comment_callback(call):
+    user_id = call.from_user.id
+    if not check_user_role(user_id, "admin"):
+        bot.answer_callback_query(call.id, "⚠️ Недостаточно прав")
+        return
+    bot.clear_step_handler_by_chat_id(call.message.chat.id)
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(
+        call.message.chat.id,
+        "Введите ID пользователя и ID места для удаления комментария (через пробел):"
+    )
+    bot.register_next_step_handler(msg, confirm_delete_comment)
+
+
+def confirm_delete_comment(message):
+    if message.text == "/cancel" or message.text == "/menu":
+        start_message(message)
+        return
+    try:
+        user_id, place_id = map(int, message.text.split())
+        cursor.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,))
+        if not cursor.fetchone():
+            raise ValueError("user_not_found")
+        cursor.execute("SELECT 1 FROM places WHERE place_id=?", (place_id,))
+        if not cursor.fetchone():
+            raise ValueError("place_not_found")
+        cursor.execute(
+            "DELETE FROM user_places WHERE user_id = ? AND place_id = ?", (user_id, place_id))
+        conn.commit()
+        bot.send_message(message.chat.id, "Комментарий удален.")
+    except ValueError as e:
+        error_type = str(e)
+        if error_type == "user_not_found":
+            error_msg = "Пользователь не найден в базе данных"
+        elif error_type == "place_not_found":
+            error_msg = "Место не найдено в базе данных"
+        else:
+            error_msg = "Неверный формат. Пример: 123 456"
+        msg = bot.send_message(message.chat.id, f"{error_msg}\nВведите ID пользователя и ID места заново:")
+        bot.register_next_step_handler(msg, confirm_delete_comment)
 
 
 @bot.callback_query_handler(func=lambda call: True)
@@ -784,359 +1134,6 @@ def edit_result(message, results, new_index):
                 message_id=message.message_id,
                 reply_markup=markup,
             )
-
-
-def check_user_role(user_id, required_role):
-    with conn:  # Автоматически завершает транзакцию
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_role FROM users WHERE user_id=?", (user_id,))
-        result = cursor.fetchone()
-        return result[0] == required_role if result else False
-
-
-@bot.callback_query_handler(func=lambda call: call.data == "add_place")
-def add_place_callback(call):
-    user_id = call.from_user.id
-    if check_user_role(user_id, "user"):
-        bot.answer_callback_query(call.id, "⚠️ Недостаточно прав")
-        return
-    bot.answer_callback_query(call.id)
-    prompt = (
-        "Отправьте фотографию места (опционально), введите данные о месте в формате:\n"
-        "Название: Пример\n"
-        "Описание: Пример\n"
-        "Ключ: Пример"
-    )
-    msg = bot.send_message(call.message.chat.id, prompt)
-    bot.register_next_step_handler(msg, process_place_input)
-
-
-def process_place_input(message):
-    if message.text.lower() == "/menu":
-        start_message(message)
-        return
-    # Получаем текст и изображение
-    if message.photo:
-        photo_id = message.photo[-1].file_id
-        text = message.caption if message.caption else ""
-    else:
-        photo_id = None
-        text = message.text
-
-    # Парсим данные
-    place_data = parse_place_info(text)
-    if not place_data:
-        bot.send_message(
-            message.chat.id,
-            "Введите данные в правильном формате:\n"
-            "Название: Пример\n"
-            "Описание: Пример\n"
-            "Ключ: пример"
-        )
-        return
-
-    # Проверяем дубликаты
-    cursor.execute("SELECT place_name FROM places")
-    places = [x[0].lower() for x in cursor.fetchall()]
-    if place_data["name"].lower() in places:
-        msg = bot.send_message(message.chat.id, "Такое место уже существует! Введите данные заново:")
-        bot.register_next_step_handler(msg, process_place_input)
-        return
-
-    # Добавляем место в БД
-    add_place_to_db(place_data, photo_id)
-    bot.send_message(message.chat.id, f"Место '{place_data['name']}' успешно добавлено!")
-
-
-@bot.callback_query_handler(func=lambda call: call.data == "edit_place")
-def edit_place_callback(call):
-    user_id = call.from_user.id
-    if check_user_role(user_id, "user"):
-        bot.answer_callback_query(call.id, "⚠️ Недостаточно прав")
-        return
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(call.message.chat.id, "Введите ID места для редактирования:")
-    bot.register_next_step_handler(msg, select_place_for_edit, user_id)
-
-
-def select_place_for_edit(message, user_id):
-    if message.text.lower() == "/menu":
-        if user_id in user_results:
-            del user_results[user_id]
-        start_message(message)
-        return
-    place_id = message.text
-    cursor.execute("SELECT place_id, place_name, description, img FROM places WHERE place_id=?", (place_id,))
-    place = cursor.fetchone()
-    if not place:
-        msg = bot.send_message(message.chat.id, "Место отсутствует в базе данных. Введите ID места заново:")
-        bot.register_next_step_handler(msg, select_place_for_edit, user_id)
-        return
-
-    # Сохраняем данные для редактирования
-    user_results[user_id] = {
-        "place_id": place[0],
-        "original": {
-            "name": place[1],
-            "description": place[2],
-            "img": place[3]
-        },
-        "updates": {}
-    }
-    # Начинаем редактирование названия
-    msg = bot.send_message(
-        message.chat.id,
-        f"Текущее название: {place[1]}\nВведите новое название или /skip, чтобы оставить как есть:"
-    )
-    bot.register_next_step_handler(msg, edit_name_step, user_id)
-
-
-def edit_name_step(message, user_id):
-    if message.text.lower() == "/menu":
-        if user_id in user_results:
-            del user_results[user_id]
-        start_message(message)
-        return
-
-    if message.text.lower() == "/skip":
-        user_results[user_id]["updates"]["name"] = user_results[user_id]["original"]["name"]
-        msg = bot.send_message(
-            message.chat.id,
-            f"Текущее описание: {user_results[user_id]["original"]["description"]}\n"
-            f"Введите новое описание или /skip, чтобы оставить как есть:"
-        )
-        bot.register_next_step_handler(msg, edit_description_step, user_id)
-        return
-
-    new_name = message.text.strip()
-    cursor.execute("SELECT place_name FROM places WHERE place_name=?", (new_name,))
-    if cursor.fetchone():
-        msg = bot.send_message(message.chat.id, "Такое название уже занято. Попробуйте другое:")
-        bot.register_next_step_handler(msg, edit_name_step, user_id)
-    else:
-        user_results[user_id]["updates"]["name"] = new_name
-        msg = bot.send_message(
-            message.chat.id,
-            f"Текущее описание: {user_results[user_id]["original"]["description"]}\n"
-            f"Введите новое описание или /skip, чтобы оставить как есть:"
-        )
-        bot.register_next_step_handler(msg, edit_description_step, user_id)
-
-
-def edit_description_step(message, user_id):
-    if message.text.lower() == "/menu":
-        if user_id in user_results:
-            del user_results[user_id]
-        start_message(message)
-        return
-
-    msg = bot.send_message(
-        message.chat.id,
-        f"Отправьте новое изображение или /skip, чтобы оставить как есть:"
-    )
-
-    if message.text.lower() == "/skip":
-        user_results[user_id]["updates"]["description"] = user_results[user_id]["original"]["description"]
-        bot.register_next_step_handler(msg, edit_image_step, user_id)
-        return
-
-    user_results[user_id]["updates"]["description"] = message.text.strip()
-    bot.register_next_step_handler(msg, edit_image_step, user_id)
-
-
-def edit_image_step(message, user_id):
-    if message.text.lower() == "/menu":
-        if user_id in user_results:
-            del user_results[user_id]
-        start_message(message)
-        return
-
-    if message.text and message.text.lower() == "/skip":
-        user_results[user_id]["updates"]["img"] = user_results[user_id]["original"]["img"]
-        apply_edits(message, user_id)
-        return
-
-    if message.photo:
-        user_results[user_id]["updates"]["img"] = message.photo[-1].file_id
-    else:
-        msg = bot.send_message(message.chat.id, "Пожалуйста, отправьте фото или /skip:")
-        bot.register_next_step_handler(msg, edit_image_step, user_id)
-        return
-
-    apply_edits(message, user_id)
-
-
-def apply_edits(message, user_id):
-    updates = user_results[user_id]["updates"]
-    place_id = user_results[user_id]["place_id"]
-
-    # Обновляем только изменённые поля
-    if "name" in updates:
-        cursor.execute("UPDATE places SET place_name=? WHERE place_id=?", (updates["name"], place_id))
-    if "description" in updates:
-        cursor.execute(
-            "UPDATE places SET description=? WHERE place_id=?", (updates["description"], place_id))
-    if "img" in updates:
-        cursor.execute("UPDATE places SET img=? WHERE place_id=?", (updates["img"], place_id))
-
-    conn.commit()
-    bot.send_message(message.chat.id, "Место успешно обновлено!")
-    del user_results[user_id]  # Очищаем временные данные
-
-
-@bot.callback_query_handler(func=lambda call: call.data == "delete_place")
-def delete_place_callback(call):
-    user_id = call.from_user.id
-    if not check_user_role(user_id, "admin"):
-        bot.answer_callback_query(call.id, "⚠️ Недостаточно прав")
-        return
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(call.message.chat.id, "Введите ID места для удаления:")
-    bot.register_next_step_handler(msg, confirm_delete_place)
-
-
-def confirm_delete_place(message):
-    if message.text == "/menu":
-        start_message(message)
-        return
-    try:
-        place_id = message.text
-        cursor.execute("SELECT place_id FROM places WHERE place_id=?", (place_id,))
-        if not cursor.fetchone():
-            raise ValueError
-        cursor.execute("SELECT place_name FROM places WHERE place_id=?", (place_id,))
-        place_name = cursor.fetchone()
-        cursor.execute("DELETE FROM places WHERE place_id=?", (place_id,))
-        conn.commit()
-        bot.send_message(message.chat.id, f"Место {place_name} удалено.")
-    except ValueError:
-        msg = bot.send_message(message.chat.id, f"Место отсутствует в базе данных\nВведите ID места заново:")
-        bot.register_next_step_handler(msg, confirm_delete_place)
-
-
-@bot.callback_query_handler(func=lambda call: call.data == "delete_user")
-def delete_user_callback(call):
-    user_id = call.from_user.id
-    if not check_user_role(user_id, "admin"):
-        bot.answer_callback_query(call.id, "⚠️ Недостаточно прав")
-        return
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(call.message.chat.id, "Введите ID пользователя для удаления:")
-    bot.register_next_step_handler(msg, confirm_delete_user)
-
-
-def confirm_delete_user(message):
-    if message.text == "/menu":
-        start_message(message)
-        return
-    try:
-        user_id = message.text
-        cursor.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,))
-        if not cursor.fetchone():
-            raise ValueError("user_not_found")
-        cursor.execute("DELETE FROM users WHERE user_id=?", (user_id,))
-        cursor.execute("DELETE FROM user_places WHERE user_id=?", (user_id,))
-        conn.commit()
-        bot.send_message(message.chat.id, f"Пользователь {user_id} удален.")
-    except ValueError as e:
-        error_type = str(e)
-        if error_type == "user_not_found":
-            error_msg = "Пользователь не найден в базе данных"
-        else:
-            error_msg = "Неверный формат. Пример: 12345"
-        msg = bot.send_message(message.chat.id, f"{error_msg}\nВведите ID заново:")
-        bot.register_next_step_handler(msg, confirm_delete_user)
-
-
-@bot.callback_query_handler(func=lambda call: call.data == "assign_role")
-def assign_role_callback(call):
-    user_id = call.from_user.id
-    if not check_user_role(user_id, "admin"):
-        bot.answer_callback_query(call.id, "⚠️ Недостаточно прав")
-        return
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(
-        call.message.chat.id,
-        "Введите ID пользователя и роль (через пробел):"
-    )
-    bot.register_next_step_handler(msg, update_user_role)
-
-
-def update_user_role(message):
-    if message.text == "/menu":
-        start_message(message)
-        return
-    allowed_roles = {"admin", "user", "manager"}
-    try:
-        user_id, role = message.text.split()
-        # Проверка формата ввода
-        if role not in allowed_roles:
-            raise ValueError("invalid_role")
-        # Проверка существования пользователя
-        cursor.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,))
-        if not cursor.fetchone():
-            raise ValueError("user_not_found")
-        cursor.execute("SELECT user_role FROM users WHERE user_id=?", (user_id,))
-        curr_role = cursor.fetchone()
-        if role in curr_role:
-            raise ValueError("same_role")
-        cursor.execute("UPDATE users SET user_role=? WHERE user_id=?", (role, user_id))
-        conn.commit()
-        bot.send_message(message.chat.id, f"Роль пользователя {user_id} изменена на {role}.")
-    except ValueError as e:
-        error_type = str(e)
-        if error_type == "invalid_role":
-            error_msg = f"Неверная роль. Используйте: {', '.join(allowed_roles)}"
-        elif error_type == "user_not_found":
-            error_msg = "Пользователь не найден в базе данных"
-        elif error_type == "same_role":
-            error_msg = "У пользователя уже установленна эта роль"
-        else:
-            error_msg = "Неверный формат. Пример: 12345 manager"
-        msg = bot.send_message(message.chat.id, f"{error_msg}\nВведите ID и роль заново:")
-        bot.register_next_step_handler(msg, update_user_role)
-
-
-@bot.callback_query_handler(func=lambda call: call.data == "delete_comment")
-def delete_comment_callback(call):
-    user_id = call.from_user.id
-    if not check_user_role(user_id, "admin"):
-        bot.answer_callback_query(call.id, "⚠️ Недостаточно прав")
-        return
-    bot.answer_callback_query(call.id)
-    msg = bot.send_message(
-        call.message.chat.id,
-        "Введите ID пользователя и ID места для удаления комментария (через пробел):"
-    )
-    bot.register_next_step_handler(msg, confirm_delete_comment)
-
-
-def confirm_delete_comment(message):
-    if message.text == "/menu":
-        start_message(message)
-        return
-    try:
-        user_id, place_id = map(int, message.text.split())
-        cursor.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,))
-        if not cursor.fetchone():
-            raise ValueError("user_not_found")
-        cursor.execute("SELECT 1 FROM places WHERE place_id=?", (place_id,))
-        if not cursor.fetchone():
-            raise ValueError("place_not_found")
-        cursor.execute(
-            "DELETE FROM user_places WHERE user_id = ? AND place_id = ?", (user_id, place_id))
-        conn.commit()
-        bot.send_message(message.chat.id, "Комментарий удален.")
-    except ValueError as e:
-        error_type = str(e)
-        if error_type == "user_not_found":
-            error_msg = "Пользователь не найден в базе данных"
-        elif error_type == "place_not_found":
-            error_msg = "Место не найдено в базе данных"
-        else:
-            error_msg = "Неверный формат. Пример: 123 456"
-        msg = bot.send_message(message.chat.id, f"{error_msg}\nВведите ID пользователя и ID места заново:")
-        bot.register_next_step_handler(msg, confirm_delete_comment)
 
 
 if __name__ == "__main__":
