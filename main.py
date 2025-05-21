@@ -441,7 +441,7 @@ def search_callback(call):
                      "Например: 'хочу пойти на прогулку', 'театр', 'музей', 'ресторан'")
 
 
-@bot.callback_query_handler(func=lambda call: call.data == "add_place")
+@bot.callback_query_handler(func=lambda call: call.data == "add_user_place")
 def add_user_place_callback(call):
     bot.answer_callback_query(call.id)
     user_id = call.from_user.id
@@ -796,12 +796,16 @@ def check_user_role(user_id, required_role):
 
 @bot.callback_query_handler(func=lambda call: call.data == "add_place")
 def add_place_callback(call):
+    user_id = call.from_user.id
+    if check_user_role(user_id, "user"):
+        bot.answer_callback_query(call.id, "⚠️ Недостаточно прав")
+        return
     bot.answer_callback_query(call.id)
     prompt = (
         "Отправьте фотографию места (опционально), введите данные о месте в формате:\n"
         "Название: Пример\n"
         "Описание: Пример\n"
-        "Ключ: пример"
+        "Ключ: Пример"
     )
     msg = bot.send_message(call.message.chat.id, prompt)
     bot.register_next_step_handler(msg, process_place_input)
@@ -846,8 +850,11 @@ def process_place_input(message):
 
 @bot.callback_query_handler(func=lambda call: call.data == "edit_place")
 def edit_place_callback(call):
-    bot.answer_callback_query(call.id)
     user_id = call.from_user.id
+    if check_user_role(user_id, "user"):
+        bot.answer_callback_query(call.id, "⚠️ Недостаточно прав")
+        return
+    bot.answer_callback_query(call.id)
     msg = bot.send_message(call.message.chat.id, "Введите ID места для редактирования:")
     bot.register_next_step_handler(msg, select_place_for_edit, user_id)
 
@@ -979,12 +986,19 @@ def apply_edits(message, user_id):
 
 @bot.callback_query_handler(func=lambda call: call.data == "delete_place")
 def delete_place_callback(call):
+    user_id = call.from_user.id
+    if not check_user_role(user_id, "admin"):
+        bot.answer_callback_query(call.id, "⚠️ Недостаточно прав")
+        return
     bot.answer_callback_query(call.id)
     msg = bot.send_message(call.message.chat.id, "Введите ID места для удаления:")
     bot.register_next_step_handler(msg, confirm_delete_place)
 
 
 def confirm_delete_place(message):
+    if message.text == "/menu":
+        start_message(message)
+        return
     try:
         place_id = message.text
         cursor.execute("SELECT place_id FROM places WHERE place_id=?", (place_id,))
@@ -1002,12 +1016,19 @@ def confirm_delete_place(message):
 
 @bot.callback_query_handler(func=lambda call: call.data == "delete_user")
 def delete_user_callback(call):
+    user_id = call.from_user.id
+    if not check_user_role(user_id, "admin"):
+        bot.answer_callback_query(call.id, "⚠️ Недостаточно прав")
+        return
     bot.answer_callback_query(call.id)
     msg = bot.send_message(call.message.chat.id, "Введите ID пользователя для удаления:")
     bot.register_next_step_handler(msg, confirm_delete_user)
 
 
 def confirm_delete_user(message):
+    if message.text == "/menu":
+        start_message(message)
+        return
     try:
         user_id = message.text
         cursor.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,))
@@ -1029,6 +1050,10 @@ def confirm_delete_user(message):
 
 @bot.callback_query_handler(func=lambda call: call.data == "assign_role")
 def assign_role_callback(call):
+    user_id = call.from_user.id
+    if not check_user_role(user_id, "admin"):
+        bot.answer_callback_query(call.id, "⚠️ Недостаточно прав")
+        return
     bot.answer_callback_query(call.id)
     msg = bot.send_message(
         call.message.chat.id,
@@ -1038,6 +1063,9 @@ def assign_role_callback(call):
 
 
 def update_user_role(message):
+    if message.text == "/menu":
+        start_message(message)
+        return
     allowed_roles = {"admin", "user", "manager"}
     try:
         user_id, role = message.text.split()
@@ -1048,6 +1076,10 @@ def update_user_role(message):
         cursor.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,))
         if not cursor.fetchone():
             raise ValueError("user_not_found")
+        cursor.execute("SELECT user_role FROM users WHERE user_id=?", (user_id,))
+        curr_role = cursor.fetchone()
+        if role in curr_role:
+            raise ValueError("same_role")
         cursor.execute("UPDATE users SET user_role=? WHERE user_id=?", (role, user_id))
         conn.commit()
         bot.send_message(message.chat.id, f"Роль пользователя {user_id} изменена на {role}.")
@@ -1057,6 +1089,8 @@ def update_user_role(message):
             error_msg = f"Неверная роль. Используйте: {', '.join(allowed_roles)}"
         elif error_type == "user_not_found":
             error_msg = "Пользователь не найден в базе данных"
+        elif error_type == "same_role":
+            error_msg = "У пользователя уже установленна эта роль"
         else:
             error_msg = "Неверный формат. Пример: 12345 manager"
         msg = bot.send_message(message.chat.id, f"{error_msg}\nВведите ID и роль заново:")
@@ -1065,6 +1099,10 @@ def update_user_role(message):
 
 @bot.callback_query_handler(func=lambda call: call.data == "delete_comment")
 def delete_comment_callback(call):
+    user_id = call.from_user.id
+    if not check_user_role(user_id, "admin"):
+        bot.answer_callback_query(call.id, "⚠️ Недостаточно прав")
+        return
     bot.answer_callback_query(call.id)
     msg = bot.send_message(
         call.message.chat.id,
@@ -1074,6 +1112,9 @@ def delete_comment_callback(call):
 
 
 def confirm_delete_comment(message):
+    if message.text == "/menu":
+        start_message(message)
+        return
     try:
         user_id, place_id = map(int, message.text.split())
         cursor.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,))
