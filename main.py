@@ -14,8 +14,8 @@ cursor = conn.cursor()
 user_results = {}
 temp_place_data = {}  # Для хранения данных о новых местах в процессе добавления
 client = OpenAI(
-    api_key="sk-hBp5bpQ7j2vUkwVDhUUmISa12HjGIUVx",
-    base_url="https://api.proxyapi.ru/openai/v1",
+    api_key=f"{KEY}",
+    base_url=f"F{URL}",
 )
 
 
@@ -690,9 +690,9 @@ def send_result(chat_id, user_id, index):
 
 def check_user_role(user_id, required_role):
     with conn:  # Автоматически завершает транзакцию
-        cursor = conn.cursor()
-        cursor.execute("SELECT user_role FROM users WHERE user_id=?", (user_id,))
-        result = cursor.fetchone()
+        cur = conn.cursor()
+        cur.execute("SELECT user_role FROM users WHERE user_id=?", (user_id,))
+        result = cur.fetchone()
         return result[0] == required_role if result else False
 
 
