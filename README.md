@@ -23,5 +23,5 @@
 - Добавление мест с помошью тгк только для создателей бота(без оценки)
 # Презентация:
 PowerPoint презентацию нашего проекта можно посмотреть и скачать по [ссылке](https://docs.google.com/presentation/d/17CrF2PnTe5L4qNh78MtLmmJIrqurCido6Nk4xAcYUSM/edit?usp=sharing)
-# Демонстрационная база данных:
+# Демонстрационная архитектура базы данных:
 ![База данных](https://github.com/kiriehka0/kupoti_bot_local/blob/main/Untitled%20(3).png)
