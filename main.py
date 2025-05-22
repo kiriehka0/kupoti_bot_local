@@ -66,7 +66,7 @@ def handle_channel_post(message):
         bot.send_message(message.chat.id, "Введите место в формате:\n"
                                           "Название: Пример\n"
                                           "Описание: Пример\n"
-                                          "Ключ: пример")
+                                          "Ключ: Пример")
         return
 
     # Проверяем, существует ли уже такое место
@@ -207,19 +207,20 @@ def search_places(query):
     a = set(cursor.fetchall())
     results = []
     for key in keys:
-        if str(key[0]).lower() in query.lower():
+        if str(key[0]).lower() == query.lower():
             cursor.execute(
                 "SELECT place_name, feedback, description, img FROM places WHERE key = ? ORDER BY feedback DESC",
                 (key[0],),
             )
             results.extend(cursor.fetchall())
-    for place_name in a:
-        if str(place_name[0]).lower() in query.lower():
-            cursor.execute(
-                "SELECT place_name, feedback, description, img FROM places WHERE place_name = ? ORDER BY feedback DESC",
-                (place_name[0],),
-            )
-            results.extend(cursor.fetchall())
+    if not results:
+        for place_name in a:
+            if str(place_name[0]).lower() == query.lower():
+                cursor.execute(
+                    "SELECT place_name, feedback, description, img FROM places WHERE place_name = ? ORDER BY feedback DESC",
+                    (place_name[0],),
+                )
+                results.extend(cursor.fetchall())
     return results
 
 
@@ -437,8 +438,8 @@ def search_callback(call):
     bot.answer_callback_query(call.id)
     bot.send_message(call.message.chat.id,
                      "Что бы вы хотели найти? 🔍\n"
-                     "Можете ввести название места, тип заведения, места или ключевое слово.\n"
-                     "Например: 'хочу пойти на прогулку', 'театр', 'музей', 'ресторан'")
+                     "Можете ввести название места или ключевое слово.\n"
+                     "Например: 'прогулка', 'театр', 'музей', 'ресторан'")
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "add_user_place")
