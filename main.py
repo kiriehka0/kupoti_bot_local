@@ -15,7 +15,7 @@ user_results = {}
 temp_place_data = {}  # Для хранения данных о новых местах в процессе добавления
 client = OpenAI(
     api_key=f"{KEY}",
-    base_url=f"F{URL}",
+    base_url=f"{URL}",
 )
 
 
@@ -39,6 +39,13 @@ def analyze_comment(comment):
     except Exception as e:
         print(f"Ошибка анализа: {e}")
         return "нейтральный"
+
+def check_user_role(user_id, required_role):
+    with conn:  # Автоматически завершает транзакцию
+        cur = conn.cursor()
+        cur.execute("SELECT user_role FROM users WHERE user_id=?", (user_id,))
+        result = cur.fetchone()
+        return result[0] == required_role if result else False
 
 
 # РАБОТА С ТГ КАНАЛОМ
@@ -418,13 +425,6 @@ def point_db(message, us_id, feedback_int):
         "SELECT 1 FROM user_places WHERE user_id = ? AND place_id = ?",
         (us_id, place_id)
     )
-    # if cursor.fetchone():
-    # Если запись существует, обновляем комментарий
-    # cursor.execute(
-    #   "UPDATE user_places SET comment_user = ? WHERE user_id = ? AND place_id = ?",
-    # (comment, us_id, place_id)
-    # )
-    # Если записи нет, создаем новую с комментарием
     cursor.execute(
         "INSERT INTO user_places (user_id, place_id, comment_user, sentiment, feedback2) VALUES (?, ?, ?, ?, ?)",
         (us_id, place_id, comment, sentiment, feedback_int)
@@ -687,14 +687,6 @@ def send_result(chat_id, user_id, index):
         "delete_user", "delete_comment", "assign_role"
     ]
 )
-
-
-def check_user_role(user_id, required_role):
-    with conn:  # Автоматически завершает транзакцию
-        cur = conn.cursor()
-        cur.execute("SELECT user_role FROM users WHERE user_id=?", (user_id,))
-        result = cur.fetchone()
-        return result[0] == required_role if result else False
 
 
 @bot.callback_query_handler(func=lambda call: call.data == "add_place")
