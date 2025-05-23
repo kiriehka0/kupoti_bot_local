@@ -22,6 +22,6 @@
 - Базовый набор мест по заданным тегам: театр, прогулка, музей, ресторан
 - Добавление мест с помошью тгк только для создателей бота(без оценки)
 # Презентация:
-PowerPoint презентацию нашего проекта можно посмотреть и скачать по [ссылке](https://docs.google.com/presentation/d/17CrF2PnTe5L4qNh78MtLmmJIrqurCido6Nk4xAcYUSM/edit?usp=sharing)
+PowerPoint презентацию нашего проекта можно посмотреть и скачать по [ссылке](https://docs.google.com/presentation/d/1MnlvIS46vGgY7UyGJKKyh9tU1pFZ3VJ3/edit?usp=sharing&ouid=114729519075343971727&rtpof=true&sd=true)
 # Демонстрационная архитектура базы данных:
 ![База данных](https://github.com/kiriehka0/kupoti_bot_local/blob/main/Untitled%20(3).png)
