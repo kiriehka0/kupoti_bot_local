@@ -681,14 +681,6 @@ def send_result(chat_id, user_id, index):
         bot.send_message(chat_id, message_text, reply_markup=markup)
 
 
-@bot.callback_query_handler(
-    func=lambda call: call.data in [
-        "add_place", "edit_place", "delete_place",
-        "delete_user", "delete_comment", "assign_role"
-    ]
-)
-
-
 @bot.callback_query_handler(func=lambda call: call.data == "add_place")
 def add_place_callback(call):
     user_id = call.from_user.id
