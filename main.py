@@ -1,21 +1,40 @@
 import sqlite3
 import telebot
-from config import *
+import logging
+import os
+from dotenv import load_dotenv
+from datetime import datetime
 import random
 from randoms import *
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 from openai import OpenAI
 
-bot = telebot.TeleBot(f"{TOKEN}")
-conn = sqlite3.connect(r"database.db3", check_same_thread=False)
+
+load_dotenv()
+bot = telebot.TeleBot(os.getenv("TOKEN"))
+conn = sqlite3.connect(r"../../Downloads/database.db3", check_same_thread=False)
 cursor = conn.cursor()
+os.makedirs("logs", exist_ok=True)
+# Настройка логгера
+logging.basicConfig(
+    level=logging.ERROR,  # Уровень ERROR и выше
+    format="%(asctime)s - %(levelname)s - [%(module)s] %(message)s",
+    handlers=[
+        logging.FileHandler(f"logs/bot_{datetime.now().date()}.log", encoding="utf-8"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
 
 # Глобальные переменные
 user_results = {}
 temp_place_data = {}  # Для хранения данных о новых местах в процессе добавления
 client = OpenAI(
-    api_key=f"{KEY}",
-    base_url=f"{URL}",
+    api_key=os.getenv("KEY"),
+    base_url=os.getenv("URL"),
+    timeout=20.0,
+    max_retries=3
 )
 
 
@@ -37,7 +56,7 @@ def analyze_comment(comment):
         )
         return response.choices[0].message.content.strip().lower()
     except Exception as e:
-        print(f"Ошибка анализа: {e}")
+        logger.error(f"Ошибка анализа комментария: {e}", exc_info=True)
         return "нейтральный"
 
 def check_user_role(user_id, required_role):
@@ -116,7 +135,6 @@ def parse_place_info(text):
     if all(field in data for field in ['name', 'description', 'key']):
         return data
     return None
-
 
 def add_place_to_db(place_data, photo_id=None):
     """Добавляет место в базу данных"""
@@ -753,6 +771,7 @@ def edit_place_callback(call):
     bot.register_next_step_handler(msg, select_place_for_edit, user_id)
 
 
+
 def select_place_for_edit(message, user_id):
     if message.text == "/cancel" or message.text == "/menu":
         if user_id in temp_place_data:
@@ -783,6 +802,7 @@ def select_place_for_edit(message, user_id):
         f"Текущее название: {place[1]}\nВведите новое название или /skip, чтобы оставить как есть:"
     )
     bot.register_next_step_handler(msg, edit_name_step, user_id)
+
 
 
 def edit_name_step(message, user_id):
@@ -817,6 +837,7 @@ def edit_name_step(message, user_id):
         bot.register_next_step_handler(msg, edit_description_step, user_id)
 
 
+
 def edit_description_step(message, user_id):
     if message.text == "/cancel" or message.text == "/menu":
         if user_id in temp_place_data:
@@ -836,6 +857,7 @@ def edit_description_step(message, user_id):
 
     temp_place_data[user_id]["updates"]["description"] = message.text.strip()
     bot.register_next_step_handler(msg, edit_image_step, user_id)
+
 
 
 def edit_image_step(message, user_id):
@@ -858,6 +880,7 @@ def edit_image_step(message, user_id):
         return
 
     apply_edits(message, user_id)
+
 
 
 def apply_edits(message, user_id):
@@ -890,6 +913,7 @@ def delete_place_callback(call):
     bot.register_next_step_handler(msg, confirm_delete_place)
 
 
+
 def confirm_delete_place(message):
     if message.text == "/cancel" or message.text == "/menu":
         start_message(message)
@@ -919,6 +943,7 @@ def delete_user_callback(call):
     bot.answer_callback_query(call.id)
     msg = bot.send_message(call.message.chat.id, "Введите ID пользователя для удаления:")
     bot.register_next_step_handler(msg, confirm_delete_user)
+
 
 
 def confirm_delete_user(message):
@@ -957,6 +982,7 @@ def assign_role_callback(call):
         "Введите ID пользователя и роль (через пробел):"
     )
     bot.register_next_step_handler(msg, update_user_role)
+
 
 
 def update_user_role(message):
@@ -1007,6 +1033,7 @@ def delete_comment_callback(call):
         "Введите ID пользователя и ID места для удаления комментария (через пробел):"
     )
     bot.register_next_step_handler(msg, confirm_delete_comment)
+
 
 
 def confirm_delete_comment(message):
